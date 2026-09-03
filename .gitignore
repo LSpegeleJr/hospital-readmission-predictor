@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.ipynb_checkpoints/
+
+# Virtual environment
+venv/
+env/
+.venv/
+
+# Raw/processed data - not redistributed, see data/README.md
+data/*.csv
+data/*.zip
+!data/README.md
+
+# Large working file not needed to run the app or reproduce results
+reports/train_test_split_visualization.xlsx
+
+# Working docs / internal notes - not part of the public deliverable
+Basis Document.docx
+Results.docx
+Hospital Readmission Risk Predictor.pptx
+architecture_diagram.pptx
+Data_Basis_&_Architectue_Flow.xlsx
+Feature Decisions.xlsx
+Claude_Original_Files.zip
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+.vscode/
