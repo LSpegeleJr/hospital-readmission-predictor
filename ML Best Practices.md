@@ -612,6 +612,189 @@ examples):
 
 ---
 
+## Phase 13: Model Finalization & Deployment
+
+**Philosophy:**
+Once model comparison and tuning are done, "final" happens in two separate,
+deliberate steps: first, freeze the winning configuration and touch the holdout
+test set exactly once to get an honest final number (train on the full dev set,
+evaluate on holdout, never re-run this to fish for a better number); second,
+persist the fitted pipeline as a portable artifact so downstream consumers (an
+app, an API, a colleague) can load it without ever needing to retrain, or even
+have access to the training code, data, or environment.
+
+**Generalized code skeleton:**
+
+```python
+# finalize_model.py -- run this exactly once, after all tuning in train.py is done.
+# Importing from train.py re-runs only its fast data loading, never its
+# expensive cross-validation comparison (that logic lives inside train.py's
+# own `if __name__ == "__main__":` block, which only runs when train.py is
+# executed directly, never when it's imported).
+
+import joblib
+from train import (
+    X_train, X_test, y_train, y_test,
+    train_final_model_and_evaluate, plot_roc_pr_curves,
+)
+
+def train_final_model_and_evaluate(X_train, X_test, y_train, y_test):
+    X_train_features = get_model_features(X_train)
+    X_test_features = get_model_features(X_test)
+
+    pipeline = Pipeline([
+        ("preprocessor", build_preprocessor(X_train_features)),
+        ("classifier", FINAL_MODEL),
+    ])
+    pipeline.fit(X_train_features, y_train)
+
+    proba = pipeline.predict_proba(X_test_features)[:, 1]
+    print(f"ROC-AUC: {roc_auc_score(y_test, proba):.3f}")
+    print(f"PR-AUC: {average_precision_score(y_test, proba):.3f}")
+
+    # Persist the fully fitted pipeline (preprocessor + model together) as one
+    # portable binary artifact -- reloadable anywhere without retraining.
+    joblib.dump(pipeline, "reports/final_model.joblib")
+    return pipeline, proba
+
+if __name__ == "__main__":
+    final_pipeline, test_proba = train_final_model_and_evaluate(X_train, X_test, y_train, y_test)
+    plot_roc_pr_curves(y_test, {"Final Model": test_proba},
+                        title_suffix=" — Final Holdout Test",
+                        save_path="reports/final_holdout_curves.png")
+```
+
+**Key concepts:**
+- The holdout test set is spent, not reusable — evaluating on it is a one-way
+  action; running the finalize script more than once to "see if a tweak helps"
+  quietly turns your honest final number into another tuning experiment
+- `joblib.dump()` / `joblib.load()` for serializing a full scikit-learn `Pipeline`
+  (preprocessing + model together) to a single binary file — the consuming code
+  never needs the original training data, feature-engineering code, or
+  environment, only the artifact and matching library versions
+- Keeping the "train the final model" script separate from the "compare
+  candidate models" script, importing shared setup rather than duplicating it,
+  so there's exactly one place that defines what "final" means
+
+**Follow-up questions:**
+- Have I actually finished tuning before running this — am I treating the
+  holdout result as genuinely final, not as feedback for another round of
+  changes?
+- Does the saved artifact include everything downstream code needs (the fitted
+  preprocessor, not just the classifier)?
+- Is the artifact's path/filename something the deployment code can find
+  deterministically (e.g., a fixed `reports/` path checked into a known
+  location)?
+
+---
+
+## Phase 14: Deployment & Interactive UI Design
+
+**Philosophy:**
+A trained model creates value only once someone who isn't you can use it.
+Turning a pipeline into an interactive tool surfaces a different category of
+problem than modeling did — state management, input validation, and a deploy
+pipeline — and it rewards the same "verify empirically" instinct as the rest of
+the project: test UI behavior programmatically before trusting a manual
+click-through, and understand exactly what triggers a live update before
+assuming one happened.
+
+**Generalized code skeleton:**
+
+```python
+import streamlit as st
+import joblib
+
+MODEL_PATH = "reports/final_model.joblib"
+
+# @st.cache_resource: run this function once per app process, then hand back
+# the same object on every rerun -- without it, every widget interaction
+# would reload and re-deserialize the model from disk.
+@st.cache_resource
+def load_model():
+    return joblib.load(MODEL_PATH)
+
+try:
+    pipeline = load_model()
+except FileNotFoundError:
+    st.warning(f"No trained model found at `{MODEL_PATH}`. Run the finalize script first.")
+    st.stop()
+
+# --- Blank-by-default inputs ---
+# index=None + a placeholder starts a selectbox genuinely empty, instead of
+# silently defaulting to option 0. `key=` binds the widget to
+# st.session_state so its value survives reruns -- but once
+# st.session_state[key] exists, Streamlit uses THAT over any index=/value=
+# you pass on future reruns. This is why a reset button can't just re-render
+# the widget with a different default -- it has to clear the session_state
+# entry instead.
+FORM_KEYS = ["field_a", "field_b", "field_c"]
+
+choice = st.selectbox("Field A", ["Option 1", "Option 2"], index=None,
+                       placeholder="Make a selection", key="field_a")
+
+def reset_form():
+    """on_click callbacks run BEFORE the script reruns, so popping session_state
+    here is safe -- the widgets below then redraw with their original defaults."""
+    for k in FORM_KEYS:
+        st.session_state.pop(k, None)
+
+st.button("Reset form", on_click=reset_form)
+
+# --- Validate before predicting ---
+if st.button("Predict", type="primary"):
+    missing = [name for name, val in {"Field A": choice}.items() if val is None]
+    if missing:
+        st.warning("Please make a selection for: " + ", ".join(missing))
+        st.stop()  # halts the script here without needing to reindent everything below into an else-branch
+    # ... build input row, pipeline.predict_proba(), display result ...
+```
+
+```python
+# Testing UI logic without a browser, using Streamlit's own test framework
+from streamlit.testing.v1 import AppTest
+
+at = AppTest.from_file("app.py", default_timeout=60).run()
+at.selectbox(key="field_a").set_value("Option 1").run()
+at.button(key="Reset form")[0].click().run()
+assert at.session_state.get("field_a") is None  # confirms reset actually cleared it
+```
+
+**Key concepts:**
+- `st.cache_resource` — caches an object (like a loaded model) across reruns
+  rather than recomputing it on every widget interaction
+- `st.session_state` + `key=` — the mechanism that gives each widget persistent
+  state across reruns; critically, a keyed widget's stored session_state value
+  overrides any `index=`/`value=` default once it exists, which is why resetting
+  requires clearing the state, not re-specifying a default
+- `on_click` callbacks — run before the script reruns, making them the right
+  place for state mutations like a reset, rather than trying to branch on a
+  button's return value
+- `st.stop()` as a lightweight early-exit for validation failures, avoiding a
+  large reindent of existing code into an `else:` block
+- `streamlit.testing.v1.AppTest` — runs the app headlessly and lets you set
+  widget values, click buttons, and assert on session_state/warnings/outputs, so
+  a UI change can be verified the same way a data pipeline change is verified
+  (Phase 12's instinct, applied to UI)
+- Deployment as a side effect of version control: a platform like Streamlit
+  Community Cloud watches a GitHub branch and redeploys automatically on every
+  push — meaning "did my change ship" reduces to "is it committed AND pushed,"
+  not just saved locally
+
+**Follow-up questions:**
+- Have I tested the new UI behavior with something like `AppTest`, rather than
+  only clicking through it once by hand?
+- If a change isn't showing up after deploying, have I confirmed it's actually
+  committed (not just staged) and pushed (not just committed) to the branch the
+  deployment platform watches?
+- Does the file path the deployment platform is configured to run match the
+  file I'm actually editing (a stray duplicate file or wrong path is a common,
+  confusing cause of "my push didn't work")?
+- Does the app fail gracefully (a clear warning, not a raw traceback) if its
+  model artifact is missing or hasn't been generated yet?
+
+---
+
 ## Meta-lesson: the recurring judgment calls across every phase
 
 A few decision patterns showed up repeatedly across this entire project, worth
@@ -632,3 +815,7 @@ internalizing as general instincts for any future tabular ML work:
    crashing on a single unexpected value.
 6. **Document the "why," not just the "what"** — a verification log or experiment
    log is only valuable if it captures reasoning, not just numbers.
+7. **Ship it like you built it** — test interactive/UI changes programmatically
+   (Phase 14) before trusting a manual click-through, and confirm a deploy is
+   actually live by checking it left your machine (committed AND pushed), not
+   just that a file was saved.

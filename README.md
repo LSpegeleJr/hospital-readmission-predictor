@@ -3,6 +3,8 @@
 Predicts 30-day hospital readmission risk from patient discharge records, with an
 explainability layer so a clinician can see *why* a patient is flagged high-risk.
 
+**Live demo:** https://hospital-readmission-predictor-mkyjbbdfzvz8zzeiclbdf7.streamlit.app/
+
 ## Why this matters
 - CMS penalizes hospitals financially for excess 30-day readmissions (Hospital
   Readmissions Reduction Program).
@@ -71,11 +73,13 @@ distribution friction — was a deliberate design decision, not a default.
    https://data.cms.gov/provider-data/topics/hospitals
 
 ## Roadmap
-- [ ] Phase 1: Data ingestion + cleaning (`src/data_prep.py`)
-- [ ] Phase 2: Baseline model — logistic regression (`notebooks/01_baseline.ipynb`)
-- [ ] Phase 3: Gradient boosting model (XGBoost) + comparison
-- [ ] Phase 4: SHAP explainability layer
-- [ ] Phase 5: Streamlit app (`app/app.py`)
+- [x] Phase 1: Data ingestion + cleaning (`src/data_prep.py`)
+- [x] Phase 2: Baseline model — logistic regression (`notebooks/01_baseline.ipynb`)
+- [x] Phase 3: Gradient boosting model (XGBoost) + comparison
+- [x] Phase 4: SHAP explainability layer
+- [x] Phase 5: Streamlit app (`app/app.py`) — deployed live, with blank-by-default
+      inputs and a Reset button so the form never carries over a previous visitor's
+      selections
 - [ ] Phase 6 (stretch): LLM layer that reads discharge notes (MIMIC-IV) and generates
       plain-language risk explanations / care plans
 
@@ -92,44 +96,53 @@ misleading. Track: ROC-AUC, PR-AUC, recall at a fixed precision threshold clinic
 can act on, and calibration (a "70% risk" prediction should mean ~70% actually
 readmit).
 
-## Deploying the live demo (Streamlit Community Cloud)
-The app (`app/app.py`) loads the trained model from `reports/final_model.joblib`
-using a path relative to the repo root, so it will run as-is once the repo is on
-GitHub — no code changes needed.
+## Updating the live demo (Streamlit Community Cloud)
+The app is already deployed and live at the URL above, connected to this repo's
+`main` branch with **Main file path** set to `app/app.py`. Streamlit Community
+Cloud watches that branch and automatically redeploys within a minute or two of
+any push — there's no manual "redeploy" step for a normal code change.
 
-1. **Push this repo to GitHub** (public, so Streamlit Community Cloud and
-   interviewers can both reach it):
+To ship a change to `app/app.py` (or any other file):
+```bash
+git add app/app.py
+git commit -m "Describe the change"
+git push
+```
+Then check the app's page on https://share.streamlit.io — it briefly reruns and
+comes back up with the new code live at the same URL. If it doesn't pick up the
+change within a couple of minutes, that app's "⋮" menu on the Streamlit Cloud
+dashboard has a **Reboot app** option to force it.
+
+**If a redeploy ever fails on the model file**: the app was trained locally with
+whatever `scikit-learn`/`xgboost` versions were installed in `venv/` at the time.
+`requirements.txt` doesn't pin versions, so Streamlit Cloud installs the latest
+ones, which can occasionally be incompatible with a `joblib`-pickled model. If
+that happens, run this locally to see what trained the model:
+```bash
+venv\Scripts\activate
+pip freeze | findstr "scikit-learn xgboost shap joblib numpy pandas"
+```
+and pin those exact versions (`package==x.y.z`) in `requirements.txt`, then push
+again.
+
+### Initial one-time setup (already done for this repo — kept for reference)
+This is how the app was first connected to Streamlit Community Cloud, in case the
+project ever needs to be redeployed from scratch (a new repo, a fork, etc.):
+1. Push the repo to GitHub (public, so Streamlit Community Cloud and interviewers
+   can both reach it):
    ```bash
    git init
    git add .
    git commit -m "Initial commit"
-   ```
-   Create a new empty repo at https://github.com/new (don't initialize it with a
-   README), then:
-   ```bash
    git remote add origin https://github.com/<your-username>/<repo-name>.git
    git branch -M main
    git push -u origin main
    ```
-2. **Deploy on Streamlit Community Cloud**:
-   - Go to https://share.streamlit.io and sign in with GitHub.
-   - Click "New app" → select this repo and the `main` branch.
-   - Set **Main file path** to `app/app.py`.
-   - Click **Deploy**. The first build takes a few minutes (installing
-     `requirements.txt`).
-3. **If the deploy fails on the model file**: the app was trained locally with
-   whatever `scikit-learn`/`xgboost` versions were installed in `venv/` at the
-   time. `requirements.txt` doesn't pin versions, so Streamlit Cloud installs the
-   latest ones, which can occasionally be incompatible with a `joblib`-pickled
-   model. If that happens, run this locally to see what trained the model:
-   ```bash
-   venv\Scripts\activate
-   pip freeze | findstr "scikit-learn xgboost shap joblib numpy pandas"
-   ```
-   and pin those exact versions (`package==x.y.z`) in `requirements.txt`, then
-   push again.
-4. Before the first push, skim what `git add .` picked up (the `.gitignore` excludes
-   `venv/`, `data/*.csv`, `data/*.zip`, and the large
+2. On https://share.streamlit.io, sign in with GitHub, click **New app**, select
+   this repo and the `main` branch, set **Main file path** to `app/app.py`, and
+   click **Deploy**.
+3. Before that first push, skim what `git add .` picked up (the `.gitignore`
+   excludes `venv/`, `data/*.csv`, `data/*.zip`, and the large
    `reports/train_test_split_visualization.xlsx`) — decide whether the working
    Office docs (`Basis Document.docx`, `Results.docx`, the `.pptx` files) belong in
    a public repo or should stay local.
