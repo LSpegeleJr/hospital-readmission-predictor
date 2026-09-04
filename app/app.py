@@ -10,6 +10,8 @@
 # app.py must be launched with streamlit
     # Do not click play in VS Code - streamlit apps require own launcher
     # Type in terminal "streamlit run app/app.py"
+    # Ctrl+C gives you terminal back
+# Streamlit URL "https://hospital-readmission-predictor-mkyjbbdfzvz8zzeiclbdf7.streamlit.app/"
 
 """
 Streamlit app: clinician enters a patient's full discharge record (all 30
@@ -42,10 +44,12 @@ import shap
 import matplotlib.pyplot as plt
 
 # Streamlit funcitons, not general Python
-    # Every st.somethin() draws something on a webpage.  
-    # set_page_config controls page-level settings
+    # Every st.something() draws something on a webpage.  
+    # st.caption displays small, gray, top-aligned caption exactly where you call it
+    # st.set_page_config controls page-level settings
     # st.title draws a large heading
     # st.caption draws small muted subyext below it
+st.caption("Dropdown fields start blank — make a selection for each one, then click Predict.")
 st.set_page_config(page_title="Readmission Risk Predictor", layout="wide")
 st.title("30-Day Readmission Risk Predictor")
 st.caption("Prototype — trained on the UCI Diabetes 130-US Hospitals dataset. Not for clinical use.")
@@ -136,7 +140,50 @@ MEDICAL_SPECIALTIES = [
 ]
  
 MED_STATUS_OPTIONS = ["No", "Steady", "Up", "Down"]
- 
+
+# ---------------------------------------------------------------------------
+# Every widget on this form is keyed (key="..."). The category dropdowns and
+# the three prior-visit counts default to nothing selected: index=None for
+# selectboxes, value=None for number inputs. Both show the placeholder text
+# "Make Selection" until the visitor actually picks something -- so a brand
+# new visitor never sees those fields pre-filled with something that could
+# be mistaken for someone else's saved input. The comorbidity/age checkboxes
+# and the 5 sliders keep normal defaults (unchecked / a starting number)
+# since neither widget type supports a truly blank state.
+#
+# FORM_KEYS lists every one of those widget keys so the Reset button (further
+# down) can wipe them from st.session_state in one place instead of listing
+# them twice.
+# ---------------------------------------------------------------------------
+FORM_KEYS = [
+    "age", "admission_type_label", "admission_source_label", "discharge_disposition_label",
+    "medical_specialty", "is_60_and_over",
+    "time_in_hospital", "num_lab_procedures", "num_procedures", "num_medications",
+    "number_diagnoses", "number_outpatient", "number_emergency", "number_inpatient",
+    "max_glu_serum", "a1c_result", "change", "diabetes_med",
+    "has_ami", "has_heart_failure", "has_pneumonia", "has_copd",
+    "metformin", "repaglinide", "glimepiride", "glipizide", "glyburide",
+    "pioglitazone", "rosiglitazone", "insulin",
+]
+
+def reset_form():
+    """Callback wired to the Reset button's on_click.
+
+    Streamlit widgets that have a key store their current value in
+    st.session_state under that key. Once a key exists there, Streamlit uses
+    THAT value on every future rerun and ignores the index=/value= default
+    you passed in the widget call -- so just re-running the script would NOT
+    put the widgets back to blank.
+
+    on_click callbacks run before the rerun happens and before the widgets
+    are redrawn, so popping every form key out of session_state here means
+    that when the widgets get created again a moment later, none of them
+    find a saved value and they all fall back to their index=None/value=None
+    default -- i.e. blank, showing "Make Selection" again.
+    """
+    for k in FORM_KEYS:
+        st.session_state.pop(k, None)
+
 # ---------------------------------------------------------------------------
 # Input form -- organized into sections for readability, all 30 model
 # features represented. Numeric widgets use real min/median/max from the
@@ -151,50 +198,62 @@ col1, col2, col3 = st.columns(3)
 # Everything indented under col1 gets placed inside, same for other 2 objects.   
 with col1:
     st.markdown("**Demographics & Admission**")
-    age = st.selectbox("Age bracket", AGE_BRACKETS, index=6)
-    admission_type_label = st.selectbox("Admission type", list(ADMISSION_TYPE_OPTIONS.values()), index=0)
-    admission_source_label = st.selectbox("Admission source", list(ADMISSION_SOURCE_OPTIONS.values()), index=6)
-    discharge_disposition_label = st.selectbox("Discharge disposition", list(DISCHARGE_DISPOSITION_OPTIONS.values()), index=0)
-    medical_specialty = st.selectbox("Admitting specialty", MEDICAL_SPECIALTIES, index=18)
-    is_60_and_over = st.checkbox("Age 60 and over (Medicare-age proxy)", value=False)
- 
+    # index=None means nothing is pre-highlighted; placeholder is the grey
+    # text shown in the box until the visitor picks an option.
+    age = st.selectbox("Age bracket", AGE_BRACKETS, index=None, placeholder="Make Selection", key="age")
+    admission_type_label = st.selectbox("Admission type", list(ADMISSION_TYPE_OPTIONS.values()), index=None, placeholder="Make Selection", key="admission_type_label")
+    admission_source_label = st.selectbox("Admission source", list(ADMISSION_SOURCE_OPTIONS.values()), index=None, placeholder="Make Selection", key="admission_source_label")
+    discharge_disposition_label = st.selectbox("Discharge disposition", list(DISCHARGE_DISPOSITION_OPTIONS.values()), index=None, placeholder="Make Selection", key="discharge_disposition_label")
+    medical_specialty = st.selectbox("Admitting specialty", MEDICAL_SPECIALTIES, index=None, placeholder="Make Selection", key="medical_specialty")
+    is_60_and_over = st.checkbox("Age 60 and over (Medicare-age proxy)", value=False, key="is_60_and_over")
+
 with col2:
     st.markdown("**Visit Intensity**")
-    time_in_hospital = st.slider("Days in hospital", 1, 14, 4)
-    num_lab_procedures = st.slider("Number of lab procedures", 1, 132, 44)
-    num_procedures = st.slider("Number of procedures", 0, 6, 1)
-    num_medications = st.slider("Number of medications", 1, 81, 15)
-    number_diagnoses = st.slider("Number of diagnoses", 1, 16, 8)
-    number_outpatient = st.number_input("Prior outpatient visits (past yr)", 0, 42, 0)
-    number_emergency = st.number_input("Prior ER visits (past yr)", 0, 76, 0)
-    number_inpatient = st.number_input("Prior inpatient visits (past yr)", 0, 21, 0)
- 
+    # Back to sliders, like the original design. All 5 now share a floor of
+    # 0 -- Number of procedures always allowed sliding down to 0; the other
+    # 4 used to require at least 1, so their range is widened to match
+    # instead of forcing a minimum. All 5 also now start at 0 by default,
+    # instead of a training-data median, so nothing looks pre-filled.
+    time_in_hospital = st.slider("Days in hospital", 0, 14, 0, key="time_in_hospital")
+    num_lab_procedures = st.slider("Number of lab procedures", 0, 132, 0, key="num_lab_procedures")
+    num_procedures = st.slider("Number of procedures", 0, 6, 0, key="num_procedures")
+    num_medications = st.slider("Number of medications", 0, 81, 0, key="num_medications")
+    number_diagnoses = st.slider("Number of diagnoses", 0, 16, 0, key="number_diagnoses")
+    number_outpatient = st.number_input("Prior outpatient visits (past yr)", min_value=0, max_value=42, value=0, step=1, key="number_outpatient")
+    number_emergency = st.number_input("Prior ER visits (past yr)", min_value=0, max_value=76, value=0, step=1, key="number_emergency")
+    number_inpatient = st.number_input("Prior inpatient visits (past yr)", min_value=0, max_value=21, value=0, step=1, key="number_inpatient")
+
 with col3:
     st.markdown("**Labs & Diabetes Management**")
-    max_glu_serum = st.selectbox("Max glucose serum test", ["Unknown", "Norm", ">200", ">300"], index=0)
-    a1c_result = st.selectbox("A1C test result", ["Unknown", "Norm", ">7", ">8"], index=0)
-    change = st.selectbox("Diabetes medication changed?", ["No", "Ch"], index=0)
-    diabetes_med = st.selectbox("On any diabetes medication?", ["No", "Yes"], index=1)
+    max_glu_serum = st.selectbox("Max glucose serum test", ["Unknown", "Norm", ">200", ">300"], index=None, placeholder="Make Selection", key="max_glu_serum")
+    a1c_result = st.selectbox("A1C test result", ["Unknown", "Norm", ">7", ">8"], index=None, placeholder="Make Selection", key="a1c_result")
+    change = st.selectbox("Diabetes medication changed?", ["No", "Ch"], index=None, placeholder="Make Selection", key="change")
+    diabetes_med = st.selectbox("On any diabetes medication?", ["No", "Yes"], index=None, placeholder="Make Selection", key="diabetes_med")
     st.markdown("**HRRP Comorbidity Flags**")
-    has_ami = st.checkbox("History of AMI (heart attack)", value=False)
-    has_heart_failure = st.checkbox("History of heart failure", value=False)
-    has_pneumonia = st.checkbox("History of pneumonia", value=False)
-    has_copd = st.checkbox("History of COPD", value=False)
+    has_ami = st.checkbox("History of AMI (heart attack)", value=False, key="has_ami")
+    has_heart_failure = st.checkbox("History of heart failure", value=False, key="has_heart_failure")
+    has_pneumonia = st.checkbox("History of pneumonia", value=False, key="has_pneumonia")
+    has_copd = st.checkbox("History of COPD", value=False, key="has_copd")
  
 st.markdown("**Individual Medications** (No / Steady / Up / Down)")
+# index=0 means MED_STATUS_OPTIONS[0] -- "No" -- is pre-selected for all 8,
+# instead of starting blank. Most patients aren't on most of these
+# medications, so defaulting everything to "No" means you only have to
+# touch the handful that are actually relevant, rather than picking a
+# status for all 8 every time.
 med_col1, med_col2, med_col3, med_col4 = st.columns(4)
 with med_col1:
-    metformin = st.selectbox("Metformin", MED_STATUS_OPTIONS, index=0)
-    repaglinide = st.selectbox("Repaglinide", MED_STATUS_OPTIONS, index=0)
+    metformin = st.selectbox("Metformin", MED_STATUS_OPTIONS, index=0, key="metformin")
+    repaglinide = st.selectbox("Repaglinide", MED_STATUS_OPTIONS, index=0, key="repaglinide")
 with med_col2:
-    glimepiride = st.selectbox("Glimepiride", MED_STATUS_OPTIONS, index=0)
-    glipizide = st.selectbox("Glipizide", MED_STATUS_OPTIONS, index=0)
+    glimepiride = st.selectbox("Glimepiride", MED_STATUS_OPTIONS, index=0, key="glimepiride")
+    glipizide = st.selectbox("Glipizide", MED_STATUS_OPTIONS, index=0, key="glipizide")
 with med_col3:
-    glyburide = st.selectbox("Glyburide", MED_STATUS_OPTIONS, index=0)
-    pioglitazone = st.selectbox("Pioglitazone", MED_STATUS_OPTIONS, index=0)
+    glyburide = st.selectbox("Glyburide", MED_STATUS_OPTIONS, index=0, key="glyburide")
+    pioglitazone = st.selectbox("Pioglitazone", MED_STATUS_OPTIONS, index=0, key="pioglitazone")
 with med_col4:
-    rosiglitazone = st.selectbox("Rosiglitazone", MED_STATUS_OPTIONS, index=0)
-    insulin = st.selectbox("Insulin", MED_STATUS_OPTIONS, index=0)
+    rosiglitazone = st.selectbox("Rosiglitazone", MED_STATUS_OPTIONS, index=0, key="rosiglitazone")
+    insulin = st.selectbox("Insulin", MED_STATUS_OPTIONS, index=0, key="insulin")
  
 # ---------------------------------------------------------------------------
 # Build the single-row input DataFrame. Column names and order don't
@@ -260,16 +319,51 @@ def build_input_row():
         "has_copd": has_copd,
         "is_60_and_over": is_60_and_over,
     }])
- 
+
 # draws horizontal line across page
 st.divider()
 
-# st.button(...) draws clickable button
-    # Returns True only on single script-rerun after someone clicks it
-    # Returns False upon initial page load or whenever a rerun is triggered.  
-    # Everything under if only executes if button clicked.  
-    # type="primary" makes button standout, typically colored.  
-if st.button("Predict readmission risk", type="primary"):
+# Predict is the primary action, so it's drawn first and gets the bold,
+# filled "primary" style. Reset sits directly underneath it as a plain,
+# quieter button (no type= means the default "secondary" style). Neither
+# uses use_container_width=True, so each one only takes up as much width as
+# its own label needs instead of stretching across the page.
+    # st.button(...) draws clickable button
+        # Returns True only on single script-rerun after someone clicks it
+        # Returns False upon initial page load or whenever a rerun is triggered.
+predict_clicked = st.button("Predict readmission risk", type="primary")
+# on_click=reset_form means Streamlit calls reset_form() first, THEN reruns
+# the script -- see the big comment on reset_form() above for why that
+# order matters.
+st.button("Reset form", on_click=reset_form)
+
+if predict_clicked:
+
+    # This dictionary just pairs each field's on-screen label with its
+    # current value so we can report back exactly which ones are still
+    # empty. Checkboxes, sliders, and the 3 prior-visit counts are left out
+    # here on purpose -- all of those always hold a real value (True/False,
+    # or a number starting at 0), so they can never be "missing" the way a
+    # blank dropdown can.
+    fields_to_check = {
+        "Age bracket": age,
+        "Admission type": admission_type_label,
+        "Admission source": admission_source_label,
+        "Discharge disposition": discharge_disposition_label,
+        "Max glucose serum test": max_glu_serum,
+        "A1C test result": a1c_result,
+        "Diabetes medication changed?": change,
+        "On any diabetes medication?": diabetes_med,
+    }
+    # [name for name, value in ... if value is None]
+        # Same list-comprehension pattern as admission_type_id above, just
+        # collecting LABELS this time instead of dictionary keys.
+    missing_fields = [name for name, value in fields_to_check.items() if value is None]
+
+    if missing_fields:
+        st.warning("Please make a selection for: " + ", ".join(missing_fields))
+        st.stop()
+
     # input_row has only one ow (hypothetical patient)
     input_row = build_input_row()
 
