@@ -2,7 +2,7 @@
     # Correct Interpreter 
         # CTRL+SHIFT+P -> "Python: Select Interpreter" -> .\venv\Scripts\python.exe
     # Navigate to project root
-        # cd "C:\Larry\Education\Self Projects\Hospital Readmission Risk Predictor"
+        # cd into the project root (wherever you cloned this repo)
     # Activate correct environment
         # venv\Scripts\activate
     # Click Play or run from terminal "python src\finalize_model.py"
